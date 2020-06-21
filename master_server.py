@@ -1,29 +1,52 @@
 import datetime as dt
 import ipaddress
+import json
 import os
 import threading
 import time
-
+import uuid
 import pandas as pd
-from bottle import route, run, request, abort
+from bottle import route, run, request, abort, static_file
+from hashlib import blake2b
 
 FILE_NAME = "server_list.csv"
+server_list = pd.DataFrame()
 
 if os.path.exists(FILE_NAME):
-    server_list = pd.read_csv(FILE_NAME, parse_dates=['Last_Updated'])
-else:
-    server_list = pd.DataFrame()
+    try:
+        server_list = pd.read_csv(FILE_NAME, parse_dates=['Last_Updated'])
+    except ValueError:
+        print("Last_Updated not in list, will not read back in df")
+        server_list = pd.DataFrame()
+
+def load_json(json_dat):
+    return json.loads(json_dat.decode())
+
+
+def get_hash(env, post_data):
+    # this is dumb, should just check if ip exists, and if so, the same port exists
+    ip =(env.get('HTTP_X_FORWARDED_FOR'))
+    port =  load_json(post_data)[0]['port'][0]
+    return blake2b(str.encode(ip+port)).hexdigest()
+
+
+@route('/master_server/delete', method='POST')
+def delete_entry():
+    global server_list
+    post_data = request.body.read()
+
+    hashed_address = get_hash(request.environ, post_data)
+    if "Hash" in server_list.columns:
+        server_list = server_list[server_list["Hash"] != hashed_address]
 
 
 @route('/master_server/update', method='POST')
 def update_server_list():
     global server_list
 
-    postdata = request.body.read()
-    # list_post = postdata.decode().split('&')
+    post_data = request.body.read()
     client_ip = request.environ.get('HTTP_X_FORWARDED_FOR')
-
-    # hashed_address = hash(str(client_ip) + ":" + str(list_post[0].split("=")[1]))
+    hashed_address = get_hash(request.environ, post_data)
 
     # Check if valid IP address using built-in
     try:
@@ -31,15 +54,13 @@ def update_server_list():
     except ValueError:
         abort(500, "Invalid IP address detected!")
 
-    # Check to see if IP with PORT given is in the server_list
-    # if 'id' in server_list.columns:
-    #     found = server_list[server_list['id'] == hashed_address].index
-    #     server_list.drop(found, inplace=True)
+    if "Hash" in server_list.columns:
+        server_list = server_list[server_list.Hash != hashed_address]
 
-    df = pd.read_json(postdata, orient="records")
+    df = pd.read_json(post_data, orient="records")
     df['IP'] = str(client_ip)
     df['Last_Updated'] = dt.datetime.now()
-    # df['hash'] = hashed_address
+    df['Hash'] = hashed_address
 
     if server_list.empty:
         server_list = df
@@ -55,6 +76,22 @@ def getAllServers():
 @route('/master_server')
 def main():
     return server_list.to_html(bold_rows=True, escape=True, index=False)
+
+
+@route('/master_server/get_gif')
+def getAsGif():
+    import matplotlib.pyplot as plt
+    from pandas.plotting import table
+
+    ax = plt.subplot(111, frame_on=False)  # no visible frame
+    ax.xaxis.set_visible(False)  # hide the x axis
+    ax.yaxis.set_visible(False)  # hide the y axis
+
+    table(ax, server_list)  # where df is your data frame
+
+    plt.savefig('mytable.png')
+    os.rename('mytable.png', 'mytable.gif')
+    return static_file('mytable.gif')
 
 
 # Naive method of removing old data.
