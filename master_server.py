@@ -103,7 +103,8 @@ def pruneDataFrame():
     if 'Last_Updated' in server_list.columns:
         server_list = server_list[server_list['Last_Updated'] >= five_minutes]
     server_list.to_csv(FILE_NAME)
-    time.sleep(300)
+    time.sleep(60)
+    pruneDataFrame()
 
 
 if __name__ == '__main__':
